@@ -25,7 +25,7 @@ class Utils(abc.ABC):
 
     @staticmethod
     def non_bail_exec(cmd: str) -> subprocess.CompletedProcess:
-        return subprocess.run(cmd, shell=True, capture_output=True, text=True)
+        return subprocess.run(f"set -eufo pipefail;{cmd}", shell=True, capture_output=True, text=True, executable="/bin/bash")
 
     # may exit
     @staticmethod
@@ -46,11 +46,10 @@ class Utils(abc.ABC):
             Utils.cprint("      KO", file=sys.stderr, color=Fore.MAGENTA)
         return ok
 
-    # FIXME: handle panic
-    # FIXME: flesh out fn
+    # may exit
     @staticmethod
     def commit_hashes_between(fst: str, lst: str) -> List[str]:
-        return Utils.exec(f"'git rev-list --reverse --topo-order {fst}..{lst}'").splitlines()
+        return Utils.exec(f"git rev-list --reverse --topo-order {fst}..{lst}").splitlines()
 
 
 @dataclass
@@ -69,7 +68,14 @@ class Commit:
     # FIXME: flesh out fn
     @staticmethod
     def from_hash(c_hash: str) -> "Commit":
-        return Commit(c_hash, None, [], [], [])
+        c =  Commit(c_hash, None, [], [], [])
+        c.updated_files = Commit._updated_files(c_hash)
+        c.deleted_files = Commit._deleted_files(c_hash)
+        c.new_files = Commit._new_files(c_hash)
+    
+    @staticmethod
+    def _updated_files(c_hash: str) -> List[str]:
+        return Utils.exec(f"git diff-tree --no-commit-id --name-only -r {c_hash}").splitlines()
 
     # FIXME: handle panic
     # FIXME: remove code basedir on destruction (or directly handled by tmp dir)
