@@ -42,7 +42,11 @@ class Utils(abc.ABC):
 
     @staticmethod
     def non_bail_exec(cmd: str, cwd=None) -> subprocess.CompletedProcess:
-        return subprocess.run(f"set -eufo pipefail;{cmd}", shell=True, capture_output=True, text=True, executable="/bin/bash", cwd=cwd)
+        s = subprocess.run(f"set -eufo pipefail;{cmd}", shell=True, capture_output=True, text=True, executable="/bin/bash", cwd=cwd)
+        print(cmd)
+        print(s.stdout)
+        print(s.stderr)
+        return s
 
     # may exit
     @staticmethod
@@ -87,7 +91,8 @@ class Commit:
         Utils.exec(f"git archive {self.hash} | tar -x -C {basedir.name}")
 
         # make sure the compiler does not ignore updated files
-        Utils.exec(f"touch {' '.join(self.updated_files)}", cwd=basedir.name)
+        if self.updated_files:
+            Utils.exec(f"touch {' '.join(self.updated_files)}", cwd=basedir.name)
         
         self._code_basedir = basedir
         return self._code_basedir
@@ -163,6 +168,7 @@ def rust_hook():
         for commit in ref.commits:
             files_to_fmt.update(commit.updated_files + commit.new_files)
             files_to_fmt.difference_update(commit.deleted_files)
+        files_to_fmt = [f for f in files_to_fmt if f.endswith(".rs")]
         
         if not files_to_fmt:
             return True
@@ -206,7 +212,6 @@ def main():
  # The owner of this folder is the user that pushes
  # So we need to enable RW group rights 
  # To allow the hook to write when other users push
-print(os.environ)
 HOOK_BUILD_DIR = f"{os.environ['GIT_DIR']}/hooks/pre_receive_hook_tmp_build_dir"
 Utils.exec(f"mkdir -m=775 -p {HOOK_BUILD_DIR}")
 
