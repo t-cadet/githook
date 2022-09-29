@@ -1,7 +1,38 @@
 #!/usr/bin/python3
 
-# Git hook documentation
-# from https://git-scm.com/docs/githooks
+###############################
+#         How to use?         #
+# #############################
+# cat << EOF > my_super_hook.py
+# #!/usr/bin/python3
+#
+# import githooks
+#
+# def my_super_hook():
+#   .. # have a look at githooks.rust_hook() for some inspiration
+#   .. # or use one of the hooks githooks provides
+#
+# my_super_hook()
+#
+# EOF
+#
+# cp githooks.py /path/to/my/remote/repo.git/hooks
+# cp my_super_hook.py /path/to/my/remote/repo.git/hooks/pre-receive
+# chmod +x /path/to/my/remote/repo.git/hooks/pre-receive
+#
+# And you're done!
+# If you want to try the hook without actually pushing you can:
+#
+# echo -e "\nexit(1)" >> /path/to/my/remote/repo.git/hooks/pre-receive # this will make the hook fail in all cases and thus prevent pushes
+# cd /path/to/my/local/repo; echo test > githook_test; git commit -m "ignore: git hook test" githook_test; git push
+#
+# Don't forget to delete "exit(1)" from /path/to/my/remote/repo.git/hooks/pre-receive when you're done testing
+
+##############################
+#       Technical doc        #
+##############################
+# https://git-scm.com/docs/githooks
+# https://git-scm.com/book/en/v2/Customizing-Git-Git-Hooks
 #
 # pre-receive
 #
@@ -17,15 +48,16 @@
 #
 # See the section on "Quarantine Environment" in git-receive-pack[1] for some caveats.
 
-import os, getpass
 import abc
-from tempfile import TemporaryDirectory
-from colorama import Fore, Style
+import os
 import io
 import subprocess
 import sys
+
+from colorama import Fore, Style
 from dataclasses import dataclass, field
-from typing import Callable, List, Optional, Tuple
+from tempfile import TemporaryDirectory
+from typing import Callable, List, Optional
 
 # FIXME: this class is only used as a namespace
 class Utils(abc.ABC):
@@ -42,11 +74,7 @@ class Utils(abc.ABC):
 
     @staticmethod
     def non_bail_exec(cmd: str, cwd=None) -> subprocess.CompletedProcess:
-        s = subprocess.run(f"set -eufo pipefail;{cmd}", shell=True, capture_output=True, text=True, executable="/bin/bash", cwd=cwd)
-        print(cmd)
-        print(s.stdout)
-        print(s.stderr)
-        return s
+        return subprocess.run(f"set -eufo pipefail;{cmd}", shell=True, capture_output=True, text=True, executable="/bin/bash", cwd=cwd)
 
     # may exit
     @staticmethod
@@ -83,19 +111,18 @@ class Commit:
 
     def code_basedir(self) -> TemporaryDirectory:  # type: ignore
         if self._code_basedir:
+            # make sure the compiler does not ignore updated files
+            if self.updated_files + self.new_files:
+                Utils.non_bail_exec(f"touch {' '.join(self.updated_files + self.new_files)}", cwd=self._code_basedir.name)
             return self._code_basedir
         
         basedir = TemporaryDirectory(prefix=self.hash, dir=HOOK_BUILD_DIR)
-
+        
         # extract source code
         Utils.exec(f"git archive {self.hash} | tar -x -C {basedir.name}")
-
-        # make sure the compiler does not ignore updated files
-        if self.updated_files:
-            Utils.exec(f"touch {' '.join(self.updated_files)}", cwd=basedir.name)
         
         self._code_basedir = basedir
-        return self._code_basedir
+        return self.code_basedir()
     
     def display(self) -> str:
         return f"{Fore.YELLOW}{self.subject} ({self.short_hash}){Style.RESET_ALL}"
@@ -156,12 +183,24 @@ class PreReceiveContext:
 
         return ctx
 
+
 # FIXME: handle exceptions
 def rust_hook():
     def run_tests(commit: Commit) -> bool:
         target_dir = commit.code_basedir().name
-        ok = Utils.non_bail_exec(f"unset GIT_QUARANTINE_PATH; cargo test --release --target-dir {target_dir}", cwd=target_dir).returncode == 0
-        return ok
+
+        # cache build artefacts to avoid recompiling dependencies on each commit
+        CACHE_DIR = f"{HOOK_BUILD_DIR}/cache"
+        Utils.exec(f"mkdir -m=775 -p {CACHE_DIR}")
+
+        #cmd = f"unset GIT_QUARANTINE_PATH; cargo test --release --target-dir {target_dir}"
+        cmd = f"unset GIT_QUARANTINE_PATH; cargo test --release --target-dir {CACHE_DIR}"
+        result = Utils.non_bail_exec(cmd, cwd=target_dir)
+        
+        if result.returncode != 0:
+            print(f"\n{Fore.RED}error code [{result.returncode}] `{cmd}`{Style.RESET_ALL}\n{result.stderr}\n{result.stdout}")
+
+        return result.returncode == 0
 
     def check_fmt_on_lst_commit(ref: Ref) -> bool:
         files_to_fmt = set()
@@ -174,8 +213,13 @@ def rust_hook():
             return True
 
         target_dir = ref.commits[-1].code_basedir().name
-        ok = Utils.non_bail_exec(f"rustfmt --edition 2021 --check {' '.join(files_to_fmt)}", cwd=target_dir).returncode == 0
-        return ok
+        cmd = f"rustfmt --edition 2021 --check {' '.join(files_to_fmt)}"
+        result = Utils.non_bail_exec(cmd, cwd=target_dir)
+
+        if result.returncode != 0:
+            print(f"\n{Fore.RED}error code [{result.returncode}] `{cmd}`{Style.RESET_ALL}\n{result.stderr}\n{result.stdout}")
+
+        return result.returncode == 0
 
     Utils.cprint("Entering pre-receive hook", file=sys.stderr, color=Fore.MAGENTA)
     ctx = PreReceiveContext.from_stdin()
@@ -186,28 +230,16 @@ def rust_hook():
             if not Utils.check(
                 lambda ref=ref: check_fmt_on_lst_commit(ref), f"{ref.commits[-1].display()}"
             ):
-                Utils.bail("fmt failed")
+                Utils.bail("Push denied: please fix KO", color=Fore.MAGENTA)
 
             print("    cargo test --release", file=sys.stderr)
             for commit in ref.commits:
                 if not Utils.check(
                     lambda commit=commit: run_tests(commit), f"{commit.display()}"
                 ):
-                    Utils.bail(f"tests failed on commit {commit}")
+                    Utils.bail("Push denied: please fix KO", color=Fore.MAGENTA)
     Utils.cprint("Pre-receive hook success", file=sys.stderr, color=Fore.MAGENTA)
-    print(ctx, flush=True)
 
-
-# def test1():
-#     mock_input = io.StringIO(
-#         "old_value new_value ref_name\nold_value2\tnew_value2  ref_name2"
-#     )
-#     print(f"context mock input={PreReceiveContext.from_reader(mock_input)}")
-
-
-def main():
-    print("main")
-    print(f"context from stdin={PreReceiveContext.from_stdin()}")
 
  # The owner of this folder is the user that pushes
  # So we need to enable RW group rights 
@@ -215,12 +247,9 @@ def main():
 HOOK_BUILD_DIR = f"{os.environ['GIT_DIR']}/hooks/pre_receive_hook_tmp_build_dir"
 Utils.exec(f"mkdir -m=775 -p {HOOK_BUILD_DIR}")
 
-if __name__ == "__main__":
-    # main()
-    # test1()
-    # print("Entering pre-receive hook", flush=True)
-    # print("Env thinks the user is [%s]" % (os.getlogin()), flush=True)
-    # print("Effective user is [%s]" % (getpass.getuser()), flush=True)
-
+def main():
     rust_hook()
-    exit(1)
+    exit(1) # prevent push for testing purposes, should be removed to actually push
+
+if __name__ == "__main__":
+    main()
