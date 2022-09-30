@@ -1,6 +1,30 @@
 #!/usr/bin/python3
 
 ###############################
+#     What is Githooks?       #
+# #############################
+# Githooks enables a remote git repository to deny pushes
+# based on checkable code or git-related properties.
+#
+# A typical usecase is to deny push when
+# the code is not formatted,
+# the code does not compile,
+# or the tests fail.
+#
+# To do so, Githooks is organized as a small low-level library
+# containing helper functions to execute bash commands, print output,
+# and most importantly some abstractions over git's view of the code,
+# the main of which is the `Commit` class.
+#
+# For each commit in the push, the `Commit` class provides some metadata
+# (date, author, commit subject & body; updated, deleted & added files)
+# and a lazy (on-demand) access to the code itself, so library users
+# can implement & deny push based on arbitrary checks on the code.
+#
+# Githooks also provides some readily usable hook implementations
+# such as the `rust_hook()` function.
+
+###############################
 #         How to use?         #
 # #############################
 # cat << EOF > my_super_hook.py
@@ -16,7 +40,7 @@
 #
 # EOF
 #
-# cp githooks.py /path/to/my/remote/repo.git/hooks
+# cp githooks.py /path/to/my/remote/repo.git/hooks # FIXME: add githooks.py to pyeqdr
 # cp my_super_hook.py /path/to/my/remote/repo.git/hooks/pre-receive
 # chmod +x /path/to/my/remote/repo.git/hooks/pre-receive
 #
