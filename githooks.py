@@ -217,7 +217,6 @@ def rust_hook():
         CACHE_DIR = f"{HOOK_BUILD_DIR}/cache"
         Utils.exec(f"mkdir -m=775 -p {CACHE_DIR}")
 
-        #cmd = f"unset GIT_QUARANTINE_PATH; cargo test --release --target-dir {target_dir}"
         cmd = f"unset GIT_QUARANTINE_PATH; cargo test --release --target-dir {CACHE_DIR}"
         result = Utils.non_bail_exec(cmd, cwd=target_dir)
         
@@ -268,7 +267,7 @@ def rust_hook():
  # The owner of this folder is the user that pushes
  # So we need to enable RW group rights 
  # To allow the hook to write when other users push
-HOOK_BUILD_DIR = f"{os.environ['GIT_DIR']}/hooks/pre_receive_hook_tmp_build_dir"
+HOOK_BUILD_DIR = f"{os.path.abspath(os.environ['GIT_DIR'])}/hooks/pre_receive_hook_tmp_build_dir"
 Utils.exec(f"mkdir -m=775 -p {HOOK_BUILD_DIR}")
 
 def main():
